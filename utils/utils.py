@@ -5,28 +5,23 @@ import datetime
 import time
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from typing import List, Dict, Optional
 from graphqlclient import GraphQLClient
-from concurrent.futures import ThreadPoolExecutor
 
 
-
-class CompoundGraphQuery:
-    
+class CompoundSubgraphQuery:
     def __init__(self):
         self.client = GraphQLClient('https://api.thegraph.com/subgraphs/name/graphprotocol/compound-v2')
 
     def gql_query(self, query_string: str, variables: Optional[Dict] = None) -> Dict:
         return json.loads(self.client.execute(query_string, variables))
 
-
-    def fetch_borrow_positions(query_string: str, last_id: str = '', pkl_index: int = 0):
+    def query_borrow_positions(self, query_string: str, last_id: str = '', pkl_index: int = 0):
         with tqdm() as pbar:
             while True:
                 variables = {'last': last_id}
-                result = gql_query(query_string, variables)     
+                result = self.gql_query(query_string, variables)
                 accounts = result['data']['accounts']
                 if not accounts:
                     break
@@ -37,17 +32,16 @@ class CompoundGraphQuery:
                 pkl_index+=1
                 pbar.update(1)
                 
-    def get_top_compound_markets(client: GraphQLClient, query_string: str):
-    top_markets_json = gql_query(gql_client, query_string)['data']['markets']  
-    df_top_markets = pd.DataFrame(top_markets_json)
-    markets_numeric_columns = ['reserves', 'supplyRate', 'totalBorrows', 'totalSupply', 'underlyingPriceUSD']
-    for col in markets_numeric_columns:
-        df_top_markets[col] = df_top_markets[col].astype(np.float64)
-        
-    df_top_markets['totalSupplyUSD'] = df_top_markets.apply(lambda x: x['totalSupply']*x['underlyingPriceUSD'], axis=1)
-    return df_top_markets.sort_values(by='totalSupplyUSD', ascending=False).reset_index(drop=True)
-            
-            
+    def query_top_compound_markets(self, query_string: str):
+        top_markets_json = self.gql_query(query_string)['data']['markets']
+        df_top_markets = pd.DataFrame(top_markets_json)
+        markets_numeric_columns = ['reserves', 'supplyRate', 'totalBorrows', 'totalSupply', 'underlyingPriceUSD']
+        for col in markets_numeric_columns:
+            df_top_markets[col] = df_top_markets[col].astype(np.float64)
+        df_top_markets['totalSupplyUSD'] = df_top_markets.apply(lambda x: x['totalSupply']*x['underlyingPriceUSD'], axis=1)
+        return df_top_markets.sort_values(by='totalSupplyUSD', ascending=False).reset_index(drop=True)
+
+    @staticmethod
     def read_top_borrow_accounts(top_n: int=1000) -> pd.DataFrame:
         df_borrow_accounts = pd.DataFrame()
         pkl_files = [x for x in sorted(os.listdir('data')) if 'borrow_positions' in x]
@@ -55,7 +49,7 @@ class CompoundGraphQuery:
             df_borrow_accounts = pd.concat([df_borrow_accounts, pd.read_pickle(f"data/{pkl_file}")])
         return df_borrow_accounts.sort_values(by='totalBorrowValueInEth', ascending=False).head(top_n).reset_index(drop=True)
 
-
+    @staticmethod
     def cast_numeric_cols_to_float(df: pd.DataFrame) -> pd.DataFrame:
         numeric_columns = ['totalBorrowValueInEth', 'totalCollateralValueInEth',
                             'cTokenBalance', 'totalUnderlyingSupplied',
@@ -65,23 +59,20 @@ class CompoundGraphQuery:
             df[col] = df[col].astype(np.float64)
         return df
 
+    def parse_borrow_positions(self, df_accounts: pd.DataFrame) -> pd.DataFrame:
+        borrow_tokens_list = []
+        for tmp_account_id, df_account in df_accounts.groupby('id'):
+            tmp_totalBorrowValueInEth, tmp_totalCollateralValueInEth = df_account['totalBorrowValueInEth'], df_account['totalCollateralValueInEth']
+            for token in df_account['tokens'].values[0]:
+                tmp_token_dict = {'account_id': tmp_account_id, 'totalBorrowValueInEth': tmp_totalBorrowValueInEth, 'totalCollateralValueInEth': tmp_totalCollateralValueInEth}
+                tmp_token_dict.update(token)
+                borrow_tokens_list.append(tmp_token_dict)
 
-def parse_borrow_positions(df_accounts: pd.DataFrame) -> pd.DataFrame:
-    borrow_tokens_list = []
-    for tmp_account_id, df_account in df_accounts.groupby('id'):
-        tmp_totalBorrowValueInEth, tmp_totalCollateralValueInEth = df_account['totalBorrowValueInEth'], df_account['totalCollateralValueInEth']
-        for token in df_account['tokens'].values[0]:
-            tmp_token_dict = {'account_id': tmp_account_id, 'totalBorrowValueInEth': tmp_totalBorrowValueInEth, 'totalCollateralValueInEth': tmp_totalCollateralValueInEth}
-            tmp_token_dict.update(token)
-            borrow_tokens_list.append(tmp_token_dict)
-            
-    df_top_borrow_positions = cast_numeric_cols_to_float(pd.DataFrame(borrow_tokens_list))
-    df_top_borrow_positions = df_top_borrow_positions.rename(columns={'symbol': 'cToken_symbol'})
-    df_top_borrow_positions['symbol'] = df_top_borrow_positions['cToken_symbol'].apply(lambda x: x[1:])
-    
-    return df_top_borrow_positions.sort_values(by='totalBorrowValueInEth', ascending=False).reset_index(drop=True)
+        df_top_borrow_positions = self.cast_numeric_cols_to_float(pd.DataFrame(borrow_tokens_list))
+        df_top_borrow_positions = df_top_borrow_positions.rename(columns={'symbol': 'cToken_symbol'})
+        df_top_borrow_positions['symbol'] = df_top_borrow_positions['cToken_symbol'].apply(lambda x: x[1:])
 
-
+        return df_top_borrow_positions.sort_values(by='totalBorrowValueInEth', ascending=False).reset_index(drop=True)
 
 
 
