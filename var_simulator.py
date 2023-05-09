@@ -50,7 +50,7 @@ class VarSimulator:
         for each asset in the dataset.
         """
         for asset in self.assets:
-            model = arch.arch_model(self.log_returns[asset], p=p, q=q, vol="Garch", dist="Normal")
+            model = arch.arch_model(self.log_returns[asset], p=p, q=q, vol="Garch", dist="Normal", mean='Zero', rescale=False)
             self.models[asset] = model.fit(disp=False)
             self.forecasts[asset] = self.models[asset].forecast(horizon=n_tests, method='simulation', reindex=False)
             self.historical_volatility[asset] = self.log_returns[asset].rolling(window=n_tests - 1).std().iloc[-1]
@@ -122,13 +122,11 @@ class VarSimulator:
         return {'sim_name': f"simulation_{simulation_index}",
                 'sim_result': {"bad_debt": bad_debt, "var_value": var_prob}}
 
-    def calculate_var(self, df_top_borrow_positions: pd.DataFrame, forecasts: univariate.base.ARCHModelForecast,
-                      n_simulations: int):
+    def calculate_var(self, df_top_borrow_positions: pd.DataFrame, n_simulations: int):
         """
         Calculates the VaR for given top borrow positions and the GARCH forecasts for a given number of simulations.
 
         :param df_top_borrow_positions: A pandas DataFrame containing the top borrow positions for the accounts.
-        :param forecasts: The forecast objects obtained from the GARCH model.
         :param n_simulations: The number of simulations to be run.
 
         :return: None
@@ -142,7 +140,7 @@ class VarSimulator:
         with ThreadPoolExecutor(CPU_COUNT * 2) as executor:
             for i in range(n_simulations):
                 futures.append(
-                    executor.submit(self._calculate_single_var_measurement, df_top_borrow_positions, forecasts, i))
+                    executor.submit(self._calculate_single_var_measurement, df_top_borrow_positions, self.forecasts, i))
 
             for future in tqdm(futures):
                 res = future.result()
